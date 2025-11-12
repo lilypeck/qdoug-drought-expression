@@ -1,0 +1,541 @@
+---
+title: "Steele et al. plots"
+author: "Lily Peck"
+date: "2025-05-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(nlme)
+library(broom.mixed)
+library(multcomp)
+library(cowplot)
+library(ggpubr)
+library(emmeans)
+```
+
+
+```{r read in differential expression files and tidy them}
+## pull in drought t2 vs t1 DEGs
+drought.deseq <- read_delim("../Output-data/salmon.isoform.counts.matrix.QUDO_Drought_T2_vs_QUDO_Drought_T1.DESeq2.DE_results.P0.01_C2.DE.subset")
+drought.edger <- read_delim("../Output-data/salmon.isoform.counts.matrix.QUDO_Drought_T2_vs_QUDO_Drought_T1.edgeR.DE_results.P0.01_C2.DE.subset")
+# keep only deseq genes which are DE in edger too
+drought.deseq$edger <- drought.deseq$gene %in% drought.edger$gene
+drought.deseq <- drought.deseq %>%
+  filter(edger == T)
+## pull in wellwatered t2 vs t1 DEGs
+ww.deseq <- read_delim("../Output-data/salmon.isoform.counts.matrix.QUDO_Control_T2_vs_QUDO_Control_T1.DESeq2.DE_results.P0.01_C2.DE.subset")
+ww.edger <- read_delim("../Output-data/salmon.isoform.counts.matrix.QUDO_Control_T2_vs_QUDO_Control_T1.edgeR.DE_results.P0.01_C2.DE.subset")
+# keep only deseq genes which are DE in edger too
+ww.deseq$edger <- ww.deseq$gene %in% ww.edger$gene
+ww.deseq <- ww.deseq %>%
+  filter(edger == T)
+# keep only drought deseq genes which are not DE in well-watered too
+drought.deseq$ww <- drought.deseq$gene %in% ww.deseq$gene
+drought.deseq <- drought.deseq %>%
+  filter(ww == F)
+## pull in drought t2 vs t1 all genes
+all.genes <- read_delim("../Output-data/salmon.isoform.counts.matrix.QUDO_Drought_T2_vs_QUDO_Drought_T1.DESeq2.DE_results")
+## GO enrichment file
+enrich <- read_delim("../Output-data/salmon.isoform.counts.matrix.QUDO_Drought_T2_vs_QUDO_Drought_T1.DESeq2.DE_results.P0.01_C2.DE.subset.GOseq.enriched")
+# DEGs from mead and gugger
+mead.de <- read_delim("Mead-DE_genes_significant_all_tests.csv")
+gugger.de <- read_delim("Gugger-TableS2.csv")
+# raw expression data from well-watered treatment
+ww.genes <- read_delim("../Output-data/salmon.isoform.counts.matrix.QUDO_Control_T2_vs_QUDO_Control_T1.DESeq2.DE_results")
+# Q. douglasii gene annotations
+annots <- read_delim("../Output-data/Qdoug_transcriptome_annotations.tsv")
+# Q. lobata protein family annotations - downloaded from https://valleyoak.ucla.edu/genomic-resources/
+qlob.pfam <- read_delim(col_names = F, "Qlobata.v3.0.PCG.InterProScan5.34-73.0.tsv")
+## read in raw expression data files for two Q. lobata sites
+qlob.macr <- read_delim("../Output-data/Qlob.MACR/salmon.isoform.counts.matrix.control1_vs_drought1.DESeq2.DE_results.P0.01_C2.DE.subset")
+qlob.cent <- read_delim("../Output-data/Qlob.CENT/salmon.isoform.counts.matrix.control1_vs_drought1.DESeq2.DE_results.P0.01_C2.DE.subset")
+
+```
+
+
+```{r figure 2}
+## highlight those from all.genes which are DE
+all.genes$deg <- all.genes$gene %in% drought.deseq$gene
+all.genes <- all.genes %>%
+  mutate(DEG = case_when(deg == T & log2FoldChange < 0 ~ "T2.Down",
+                         deg == T & log2FoldChange > 0 ~ "T2.Up",
+                         .default = "ns"))
+
+# Add colour, size and alpha (transparency) to volcano plot --------------------
+cols<- c("T2.Up" = "#ffad73", "T2.Down" = "#26b3ff", "ns" = "grey") 
+t2.up <- all.genes %>% filter(DEG == "T2.Up")
+t1.up <- all.genes %>% filter(DEG == "T2.Down")
+volcano <- all.genes %>% 
+  ggplot(aes(x = log2FoldChange,
+             y = -log10(padj))) +
+  geom_point(aes(colour = DEG), 
+             alpha = 0.5, 
+             shape = 16,
+             size = 3) + 
+  geom_point(data = t2.up,
+             shape = 21,
+             size = 3,
+             alpha = 1,
+             fill = "#ffad73") +
+  geom_point(data = t1.up,
+             shape = 21,
+             size = 3,
+             alpha = 1,
+             fill = "#26b3ff") +
+  theme_minimal() +
+  scale_colour_manual(labels = c("Not significant", "T2 down", "T2 up"),
+                      values = cols,
+                      name = "Expression\nchange") +
+  scale_x_continuous(breaks = c(seq(-20, 20, 5)),
+                     limits = c(-20, 20)) +
+  labs(x = "log2(fold change)",
+       y = "-log10(adjusted P-value)") +
+  theme(legend.position = c(0.86,0.8),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        legend.text = element_text(size = 8),
+        legend.title = element_blank())
+
+## bar plot to accompany volcano
+## remove overlapping DEGs from WW
+# pull in original file as filtered out overlapping genes from drought.deseq
+drought.deseq2 <- read_delim("../Data/salmon.isoform.counts.matrix.QUDO_Drought_T2_vs_QUDO_Drought_T1.DESeq2.DE_results.P0.01_C2.DE.subset")
+ww.deseq$drought <- ww.deseq$gene %in% drought.deseq2$gene
+ww.deseq2 <- ww.deseq %>%
+  filter(drought == F)
+dr.tab <- drought.deseq %>%
+  mutate(tab = case_when(log2FoldChange < 0 ~ "T2 down",
+                         log2FoldChange > 0 ~ "T2 up"),
+         Type = "Drought") %>%
+  group_by(Type,tab) %>%
+  summarise(n = n())
+ww.tab <- ww.deseq2 %>%
+  mutate(tab = case_when(log2FoldChange < 0 ~ "T2 down",
+                         log2FoldChange > 0 ~ "T2 up"),
+         Type = "Well-watered") %>%
+  group_by(Type,tab) %>%
+  summarise(n = n())
+tab <- bind_rows(dr.tab,ww.tab)
+
+bar <- tab %>%
+  ggplot(aes(x=Type, y=n, fill=tab)) +
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_minimal() +
+  scale_fill_manual(values=c("#26b3ff","#ffad73")) +
+  ylab("Differentially expressed\ngenes (n)") +
+  theme(legend.position = c(0.88,0.8),
+        legend.text = element_text(size = 8),
+        legend.title = element_blank(),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        axis.title.x = element_blank(),
+        title = element_text(size = 10))
+
+plot_grid(bar, volcano, ncol = 1, align = "hv", labels = "AUTO")
+ggsave(bg = "white", 
+       height = 5, width = 5, units = "in",
+       "plots/Figure2.svg")
+```
+
+```{r figure 3}
+## tidy data for heatmap plotting log2foldchange by gene name
+drought.deseq.hm <- drought.deseq %>%
+    filter(log2FoldChange > 1) %>%
+    dplyr::select(!sampleA:padj) %>%
+    pivot_longer(cols = `QUDO_10_Control_T1_1`:`QUDO_9_Drought_T2_8`, names_to = "nams", values_to = "vals") %>%
+    dplyr::select(!edger:ww) %>%
+    separate_wider_delim(cols = nams, names = c("q","fam","treatment","time","indiv"), delim = "_") %>%
+    unite(q:time, col = "Indiv", sep = "_") %>%
+    #dplyr::select(!q:fam) %>%
+    group_by(gene,Indiv) %>%
+    summarise(Expression = mean(vals)) %>%
+    pivot_wider(names_from = "Indiv", values_from = "Expression") %>%
+  dplyr::select(contains("Drought")) %>%
+  pivot_longer(cols = -gene, names_to = "Indiv", values_to = "vals") %>%
+  separate_wider_delim(cols = Indiv, names = c("q","fam","treatment","time"), delim = "_") %>%
+  unite(q:fam, col = Indiv, sep = "_") %>%
+  group_by(gene, time) %>%
+  summarise(Expression = mean(vals)) %>%
+  mutate(gene = gsub("TRINITY_GG_","gene_",gene))
+  
+## then plot
+drought.deseq.hm %>%
+  ggplot(aes(x = time, y = reorder(gene, log10(Expression)), fill= log10(Expression))) + 
+  geom_tile() +
+  scale_fill_gradient2(mid="white",low = "red3", high="red4", na.value = "lightgrey") +
+  theme(axis.text.x.bottom = element_text(),
+        axis.title = element_blank(),
+        axis.text = element_text(size = 20),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20),
+        legend.position="bottom")
+
+ggsave(bg = "white", 
+       height = 14, width = 15, units = "in",
+       "plots/Figure3.svg")
+```
+
+```{r figure 4}
+## tidy GO enrichment file
+enrich2 <- enrich %>%
+  filter(over_represented_pvalue < 0.01) %>%
+  unite(term:ontology, col = "term", sep = " ") %>%
+  dplyr::select(category,term,gene_ids) %>%
+  separate_wider_delim(gene_ids, delim = ", ", names_sep = "", too_few = "debug") %>%
+  dplyr::select(category,term,gene_ids1:gene_ids14) %>%
+  pivot_longer(cols = gene_ids1:gene_ids14, names_to = "nams", values_to = "gene") %>%
+  drop_na() %>%
+  dplyr::select(!nams) %>%
+  rename(GO.enrich = category)
+
+## tidy differential expression data for plotting
+drought.deseq.go.hm <- drought.deseq %>%
+  left_join(enrich2) %>%
+  relocate(GO.enrich, .before = "sampleA") %>%
+  mutate(DEG = case_when(log2FoldChange < 0 ~ "T2.Down",
+                         log2FoldChange > 0 ~ "T2.Up")) %>%
+  dplyr::select(!sampleA:padj) %>%
+  pivot_longer(cols = `QUDO_10_Control_T1_1`:`QUDO_9_Drought_T2_8`, names_to = "nams", values_to = "vals") %>%
+  dplyr::select(!edger:ww) %>%
+  separate_wider_delim(cols = nams, names = c("q","fam","treatment","time","indiv"), delim = "_") %>%
+  unite(q:time, col = "Indiv", sep = "_") %>%
+  group_by(DEG,GO.enrich,term,Indiv) %>%
+  summarise(Expression = mean(vals)) %>%
+  pivot_wider(names_from = "Indiv", values_from = "Expression") %>%
+  dplyr::select(contains("Drought")) %>%
+  pivot_longer(cols = c(-GO.enrich, -DEG, -term), names_to = "Indiv", values_to = "vals") %>%
+  separate_wider_delim(cols = Indiv, names = c("q","fam","treatment","time"), delim = "_") %>%
+  unite(q:fam, col = Indiv, sep = "_") %>%
+  group_by(DEG,GO.enrich, term,time) %>%
+  summarise(Expression = mean(vals)) %>%
+  pivot_wider(names_from = time, values_from = Expression) %>%
+  mutate(diff = abs((T2-T1)/T1)) %>%
+  filter(diff > abs(0.87)) %>%
+  pivot_longer(cols = T1:T2, names_to = "time", values_to = "Expression") %>%
+  mutate(term = gsub("oxidoreductase activity.*$","oxidoreductase activity",term))
+
+## plot
+drought.deseq.go.hm %>%
+  filter(DEG == "T2.Down") %>%
+  drop_na() %>%
+  ggplot(aes(x = time, y = reorder(term, log10(Expression)), fill= log10(Expression))) + 
+  geom_tile() +
+  scale_fill_gradient2(high = "darkblue",low = "blue",mid = "white", na.value = "lightgrey") + #up-reg
+  theme(axis.text.x.bottom = element_text(),
+        axis.title = element_blank(),
+        axis.text = element_text(size = 20),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20),
+        legend.position = "bottom")
+
+ggsave(bg = "white", 
+       height = 14, width = 15, units = "in",
+       "plots/Figure4.svg")
+
+## supp fig without filtering
+drought.deseq.go.hm <- drought.deseq %>%
+  left_join(enrich2) %>%
+  relocate(GO.enrich, .before = "sampleA") %>%
+  mutate(DEG = case_when(log2FoldChange < 0 ~ "T2.Down",
+                         log2FoldChange > 0 ~ "T2.Up")) %>%
+  dplyr::select(!sampleA:padj) %>%
+  pivot_longer(cols = `QUDO_10_Control_T1_1`:`QUDO_9_Drought_T2_8`, names_to = "nams", values_to = "vals") %>%
+  dplyr::select(!edger:ww) %>%
+  separate_wider_delim(cols = nams, names = c("q","fam","treatment","time","indiv"), delim = "_") %>%
+  unite(q:time, col = "Indiv", sep = "_") %>%
+  group_by(DEG,GO.enrich,term,Indiv) %>%
+  summarise(Expression = mean(vals)) %>%
+  pivot_wider(names_from = "Indiv", values_from = "Expression") %>%
+  dplyr::select(contains("Drought")) %>%
+  pivot_longer(cols = c(-GO.enrich, -DEG, -term), names_to = "Indiv", values_to = "vals") %>%
+  separate_wider_delim(cols = Indiv, names = c("q","fam","treatment","time"), delim = "_") %>%
+  unite(q:fam, col = Indiv, sep = "_") %>%
+  group_by(DEG,GO.enrich, term,time) %>%
+  summarise(Expression = mean(vals)) %>%
+  pivot_wider(names_from = time, values_from = Expression) %>%
+  mutate(diff = abs((T2-T1)/T1)) %>%
+  #filter(diff > abs(0.87)) %>%
+  pivot_longer(cols = T1:T2, names_to = "time", values_to = "Expression") %>%
+  mutate(term = gsub("oxidoreductase activity.*$","oxidoreductase activity",term))
+
+## plot
+drought.deseq.go.hm %>%
+  filter(DEG == "T2.Down") %>%
+  drop_na() %>%
+  ggplot(aes(x = time, y = reorder(term, log10(Expression)), fill= log10(Expression))) + 
+  geom_tile() +
+  scale_fill_gradient2(high = "darkblue",low = "blue",mid = "white", na.value = "lightgrey") + #up-reg
+  theme(axis.text.x.bottom = element_text(),
+        axis.title = element_blank(),
+        axis.text = element_text(size = 20),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20),
+        legend.position = "bottom")
+
+ggsave(bg = "white", 
+       height = 14, width = 15, units = "in",
+       "plots/FigureS2.svg")
+
+```
+
+```{r}
+## Drought-responsive pfams
+## tidy and identify pfams DE in both studies
+## select all pfams, not just first in list
+gugger.de2 <- gugger.de %>%
+  dplyr::select(Contig, `TAIR or Pfam ID`) %>%
+  rename(Pfam.gugger = `TAIR or Pfam ID`) %>%
+  drop_na() %>%
+  filter(!grepl("AT",Pfam.gugger)) %>%
+  separate_wider_delim(Pfam.gugger, names_sep = "", delim = " ", too_few = "debug") %>%
+  dplyr::select(Contig:Pfam.gugger15) %>%
+  pivot_longer(cols = -c(Contig), names_to = "nams", values_to = "vals") %>%
+  drop_na() %>%
+  mutate(Pfam.gugger = gsub(".*:","",vals)) %>%
+  dplyr::select(Contig, Pfam.gugger)
+## filtered by pval < 0.01 to make more stringent
+mead.de2 <- mead.de %>%
+  filter(adj.P.Val < 0.01) %>%
+  separate_wider_delim(cols = pfam_id, delim = ", ", names_sep = "",too_few = "debug") %>%
+  dplyr::select(gene,pfam_id1:pfam_id5) %>%
+  pivot_longer(cols = -c(gene), names_to = "nams", values_to = "vals") %>%
+  dplyr::select(!nams) %>%
+  filter(!vals == "none") %>%
+  drop_na() %>%
+  mutate(vals = gsub(".*:","",vals),
+         vals = gsub("\\..*$","",vals)) %>%
+  rename(pfam = vals) %>%
+  mutate(both = pfam %in% gugger.de2$Pfam.gugger) %>%
+  filter(both == T)
+# get Q. lobata pfam names as list
+pfam.n <- mead.de2 %>%
+  dplyr::select(pfam) %>%
+  distinct()
+```
+
+
+```{r figure 5 and tab S4}
+## format expression files for each site
+qlob.macr <- qlob.macr %>% mutate(Site = "MACR")
+qlob.cent <- qlob.cent %>% mutate(Site = "CENT")
+qlob.both <- bind_rows(qlob.macr,qlob.cent)
+# tidy pfams
+qlob.pfam2 <- qlob.pfam %>%
+  filter(X4 == "Pfam") %>%
+  dplyr::select(X1,X5,X6) %>%
+  distinct() %>%
+  rename(gene = X1, Pfam = X5, Pfam.name = X6)
+## get mean expression for all genes that are DEG in both sites
+qlob.both2 <- qlob.both %>%
+  dplyr::select(!sampleA:padj) %>%
+  pivot_longer(cols = -c(gene, Site), names_to = "nams", values_to = "vals") %>%
+  separate_wider_delim(nams, names = c("Treatment","Pop","Mum","Indiv"), delim = "_") %>%
+  filter(!Pop == "REDI") %>%
+  group_by(gene,Pop,Mum,Treatment) %>%
+  summarise(mean = mean(vals)) %>%
+  group_by(gene,Pop,Treatment) %>%
+  summarise(expr = mean(mean))
+## get list of drought-responsive pfams with >1 DEG
+qlob.both.deg.n <- qlob.both2 %>%
+  ungroup() %>%
+  dplyr::select(gene) %>%
+  distinct() %>%
+  left_join(qlob.pfam2) %>%
+  mutate(temp = Pfam %in% pfam.n$pfam) %>%
+  filter(temp == T) %>% 
+  group_by(Pfam) %>%
+  summarise(n = n()) %>%
+  filter(n > 1)
+## get mean expression for each deg drought-responsive pfam
+qlob.both2.expr <- qlob.both2 %>%
+  left_join(qlob.pfam2) %>%
+  mutate(keep = Pfam %in% qlob.both.deg.n$Pfam) %>%
+  filter(keep == T) %>%
+  group_by(Pfam,Pop,Treatment) %>%
+  summarise(Expression = mean(expr), gene.n = n()) %>%
+  mutate(Treatment = gsub("control1","Well-watered",Treatment),
+         Treatment = gsub("drought1","Drought",Treatment),
+         Species = "Qlob")
+## now check expr of these same drought-responsive pfams in qdoug
+annots2 <- annots %>%
+  separate_wider_delim(cols = Pfam, delim = "`", names_sep = "",too_few = "debug") %>%
+  dplyr::select(transcript_id,Pfam1:Pfam10) %>%
+  pivot_longer(cols = Pfam1:Pfam10, names_to = "nams",values_to = "vals") %>%
+  drop_na() %>%
+  filter(!vals == ".") %>%
+  mutate(vals = gsub("\\^.*$","",vals),
+         vals = gsub("\\..*$","",vals),
+         temp = vals %in% pfam.n$pfam) %>%
+  rename(pfam = vals, gene = transcript_id)
+## get pfams which were DEG in both mead and gugger
+annots.deg <- annots2 %>%
+  filter(temp == TRUE) %>%
+  dplyr::select(gene,pfam) %>%
+  distinct()
+## filter by DEG pfam and tidy data for plotting
+steele.allgenes2 <- all.genes %>%
+  left_join(annots.deg) %>%
+  mutate(keep = pfam %in% qlob.both.deg.n$Pfam) %>%
+  filter(keep == T) %>%
+  pivot_longer(cols = baseMeanA:baseMeanB, names_to = "nams", values_to = "vals") %>%
+  group_by(pfam,nams) %>%
+  summarise(Expression = mean(vals),gene.n = n()) %>%
+  rename(Pfam = pfam, Treatment = nams) %>%
+  mutate(Treatment = gsub("baseMeanA","Drought",Treatment),
+         Treatment = gsub("baseMeanB","Well-watered",Treatment)) %>%
+  mutate(Pop = "ONEA",
+         Species= "Qdoug")
+## combine species
+qlob.qdoug.expr <- bind_rows(qlob.both2.expr,steele.allgenes2)
+## take raw expression per gene
+qdoug.raw.expr <- all.genes %>%
+  left_join(annots.deg) %>%
+  mutate(keep = pfam %in% qlob.both.deg.n$Pfam) %>%
+  filter(keep == T) %>%
+  dplyr::select(gene,pfam,baseMeanA,baseMeanB) %>%
+  pivot_longer(cols = baseMeanA:baseMeanB, names_to = "nams", values_to = "vals") %>%
+  rename(Pfam = pfam, Treatment = nams, Expression = vals) %>%
+  mutate(Treatment = gsub("baseMeanA","Drought",Treatment),
+         Treatment = gsub("baseMeanB","Well-watered",Treatment)) %>%
+  mutate(Pop = "ONEA")
+qlob.raw.expr <- qlob.both2 %>%
+  left_join(qlob.pfam2) %>%
+  mutate(keep = Pfam %in% qlob.both.deg.n$Pfam) %>%
+  filter(keep == T) %>%
+  dplyr::select(!keep) %>%
+  mutate(Treatment = gsub("control1","Well-watered",Treatment),
+         Treatment = gsub("drought1","Drought",Treatment)) %>%
+  rename(Expression = expr)
+qlob.qdoug.raw.expr <- bind_rows(qlob.raw.expr, qdoug.raw.expr)
+
+# Draw a qq plot by group to check normally distributed - need to sqrt/log10 expression because of top tail
+ggqqplot(qlob.qdoug.raw.expr, x = "Expression", facet.by = "Pop")
+# Fit the model
+qlob.qdoug.raw.expr <- qlob.qdoug.raw.expr %>%
+  mutate(Pop = factor(Pop, levels = c("MACR","CENT","ONEA")))
+## model (gene nested in pfam overfits the model)
+model <- aov(scale(Expression) ~ Pop * Treatment + (1+Pfam), data = qlob.qdoug.raw.expr)
+tidy(model)
+# filter by treatment
+qlob.qdoug.raw.expr.control <- qlob.qdoug.raw.expr %>% filter(Treatment == "Well-watered") %>% mutate(Pop = as.factor(Pop))
+# Fit the model
+model <- aov(scale(Expression) ~ Pop + (1+Pfam), data = qlob.qdoug.raw.expr.control)
+# Run Tukey  
+values <- summary(glht(model, linfct = mcp(Pop = "Tukey")), test = adjusted(type = "bonferroni"))
+values2 <- tidy(values)
+letters.control <- tidy(cld(values))
+letters.control
+# filter by treatment
+qlob.qdoug.raw.expr.drought <- qlob.qdoug.raw.expr %>% filter(Treatment == "Drought") %>% mutate(Pop = as.factor(Pop))
+# Fit the model - family
+model <- aov(scale(Expression) ~ Pop + (1+Pfam), data = qlob.qdoug.raw.expr.drought)
+# Run Tukey  
+values <- summary(glht(model, linfct = mcp(Pop = "Tukey")), test = adjusted(type = "bonferroni"))
+values2 <- tidy(values)
+letters.drought <- tidy(cld(values))
+letters.drought
+letters <- bind_rows(letters.control,
+                     letters.drought)
+letters <- letters %>% mutate(Treatment = c("Well-watered","Well-watered","Well-watered",
+                                            "Drought","Drought","Drought"),
+                              letters = c("b","b","a","a","b","c"))
+
+## figure 5b - boxplot to look at constitutive expression for deg drought-responsive pfams
+qlob.qdoug.raw.expr <- qlob.qdoug.raw.expr %>%
+  mutate(Treatment = factor(Treatment, levels = c("Well-watered","Drought")))
+letters <- letters %>%
+  mutate(Treatment = factor(Treatment, levels = c("Well-watered","Drought")))
+qlob.qdoug.raw.expr %>%
+  group_by(Pfam,Pop,Treatment) %>%
+  summarise(Expr = mean(Expression)) %>%
+  ggplot(aes(x = Pop, y = sqrt(Expr), fill = Treatment)) +
+  geom_boxplot(position=position_dodge(1)) +
+  facet_grid(~ Treatment) + 
+  scale_fill_manual(values=c("#26b3ff","#ffad73")) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 12),
+        strip.text = element_text(size = 12)) +
+  ylab("sqrt(Expression)") +
+  geom_text(data = letters, 
+            aes(x = Pop,
+                y = 45,
+                size = 4,
+                label = letters))
+ggsave(bg = "white", 
+       height = 5, width = 5, units = "in",
+       "plots/Figure5b.svg")
+
+## figure 5c - norm of reaction for same genes by site
+## test slope, run model by site
+#onea
+onea <- qlob.qdoug.raw.expr %>% filter(Pop == "ONEA") %>%
+  mutate(Pfam = as.factor(Pfam))
+## overall slope / regression coefficient (TreatmentDrought)
+mod <- lme(scale(Expression) ~ Treatment + Pfam, random = ~1 | gene, data = onea)
+tidy(mod)
+# onea = 0.01, p = 0.00017
+## then get list of slopes for each pfam for supp tab
+tab <- tidy(mod)
+tab1 <- tab %>%
+  filter(grepl("^Pfam",term)) %>%
+  dplyr::select(estimate,term) %>%
+  mutate(Pop = "ONEA")
+#cent
+cent <- qlob.qdoug.raw.expr %>% filter(Pop == "CENT")
+mod <- lme(scale(Expression) ~ Treatment + Pfam, random = ~1 | gene, data = cent)
+tidy(mod)
+# cent = 0.171, p = 0.0770
+tab <- tidy(mod)
+tab2 <- tab %>%
+  filter(grepl("^Pfam",term)) %>%
+  dplyr::select(estimate,term) %>%
+  mutate(Pop = "CENT")
+# macr
+macr <- qlob.qdoug.raw.expr %>% filter(Pop == "MACR") %>%  mutate(Pfam = as.factor(Pfam))
+mod <- lme(scale(Expression) ~ Treatment + Pfam, random = ~1 | gene, data = macr)
+tidy(mod)
+# macr = 0.835, p = 0.0000000431
+tab <- tidy(mod)
+tab3 <- tab %>%
+  filter(grepl("^Pfam",term)) %>%
+  dplyr::select(estimate,term) %>%
+  mutate(Pop = "MACR")
+tabs <- bind_rows(tab1,tab2,tab3)
+tabs <- tabs %>%
+  mutate(term = as.factor(term),
+         Pop = as.factor(Pop)) %>%
+  pivot_wider(names_from = Pop, values_from = estimate)
+
+## save supp tab 4
+write_delim(delim = "\t", tabs, "plots/TableS4.tsv")
+
+qlob.qdoug.raw.expr %>%
+  group_by(Pfam,Pop,Treatment) %>%
+  summarise(Expr = mean(Expression)) %>%
+  arrange(Pop,Treatment,Expr) %>%
+  mutate(Pop = gsub("MACR", "QL; MACR", Pop),
+         Pop = gsub("CENT", "QL; CENT", Pop),
+         Pop = gsub("ONEA", "QD; ONEA", Pop),
+         Pop = factor(Pop, levels = c("QL; MACR","QL; CENT","QD; ONEA"))) %>%
+  ggplot(aes(x = Treatment, y = sqrt(Expr), group = Pop, color = Pop)) +
+  #geom_hline(yintercept = 9, linetype = "dashed", color = "grey") +
+  geom_smooth(aes(color = Pop, fill = Pop)) +
+  #geom_line(size = 1, alpha = 0.5) +
+  facet_wrap(~Pop) +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        strip.text = element_text(size = 12),
+        legend.position = "none") +
+  ylab("sqrt(Expression)") 
+
+ggsave(bg = "white",
+       height = 4, width = 8, units = "in",
+       "plots/Figure5C.svg")
+
+```
