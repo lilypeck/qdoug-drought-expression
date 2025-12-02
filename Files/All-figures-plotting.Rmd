@@ -44,7 +44,7 @@ mead.de <- read_delim("Mead-DE_genes_significant_all_tests.csv")
 gugger.de <- read_delim("Gugger-TableS2.csv")
 # raw expression data from well-watered treatment
 ww.genes <- read_delim("../Output-data/salmon.isoform.counts.matrix.QUDO_Control_T2_vs_QUDO_Control_T1.DESeq2.DE_results")
-# Q. douglasii gene annotations
+# Q. douglasii gene annotations - need to unzip
 annots <- read_delim("../Output-data/Qdoug_transcriptome_annotations.tsv")
 # Q. lobata protein family annotations - downloaded from https://valleyoak.ucla.edu/genomic-resources/
 qlob.pfam <- read_delim(col_names = F, "Qlobata.v3.0.PCG.InterProScan5.34-73.0.tsv")
@@ -101,7 +101,7 @@ volcano <- all.genes %>%
 ## bar plot to accompany volcano
 ## remove overlapping DEGs from WW
 # pull in original file as filtered out overlapping genes from drought.deseq
-drought.deseq2 <- read_delim("../Data/salmon.isoform.counts.matrix.QUDO_Drought_T2_vs_QUDO_Drought_T1.DESeq2.DE_results.P0.01_C2.DE.subset")
+drought.deseq2 <- read_delim("../Output-data/salmon.isoform.counts.matrix.QUDO_Drought_T2_vs_QUDO_Drought_T1.DESeq2.DE_results.P0.01_C2.DE.subset")
 ww.deseq$drought <- ww.deseq$gene %in% drought.deseq2$gene
 ww.deseq2 <- ww.deseq %>%
   filter(drought == F)
@@ -136,7 +136,7 @@ bar <- tab %>%
 plot_grid(bar, volcano, ncol = 1, align = "hv", labels = "AUTO")
 ggsave(bg = "white", 
        height = 5, width = 5, units = "in",
-       "plots/Figure2.svg")
+       "plots/Figure2.png")
 ```
 
 ```{r figure 3}
